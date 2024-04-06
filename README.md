@@ -1,3 +1,5 @@
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.10928477.svg)](https://doi.org/10.5281/zenodo.10928477)
+
 # mk-lr
 
 Welcome to our code repository! The code you'll find here is related to our paper, "Share to Gain: Collaborative Learning with Dynamic Membership via Multi-Key Homomorphic Encryption", submitted to Scientific Reports. Our primary focus is on implementing a logistic regression algorithm based on Multi-Key Homomorphic Encryption (MK-HE).
@@ -30,7 +32,5 @@ Files with the same names as those in MKCKKS have similar functionalities. Due t
 - key_switch_hoisted: Implements 'hoisted' key switching, a more efficient technique when carrying out key switching multiple times on the same ciphertexts.
 
 Feel free to test and explore our repository.
-
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.10928477.svg)](https://doi.org/10.5281/zenodo.10928477)
 
 
