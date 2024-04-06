@@ -31,3 +31,6 @@ Files with the same names as those in MKCKKS have similar functionalities. Due t
 
 Feel free to test and explore our repository.
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.10928477.svg)](https://doi.org/10.5281/zenodo.10928477)
+
+
