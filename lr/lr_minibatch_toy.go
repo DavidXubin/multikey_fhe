@@ -24,19 +24,21 @@ var (
 	numCompany = 4
 
 	numTrain  = 512
-	numIter   = 4
-	batchSize = 512
+	batchSize = 128
+	numBatch  = (int)(numTrain / batchSize)
+	numIter   = 4 //same as the number of companies
 
-	classification_label = 0
-	gamma                = 3                                    // learning rate
-	eta                  = [4]float64{1, 0, -0.28175, -0.43404} // weight
+	classification_label = 0 // 0, 1, 2, 3 in this case.
+
+	gamma = 3                                    // learning rate
+	eta   = [4]float64{1, 0, -0.28175, -0.43404} // weight
 
 	c3 = -0.0015
 	c1 = 0.15
 	c0 = 0.5 // sigmoid(x) = c3*x^3 + c1*x + c0
 
 	// Variables for HE setting
-	slotNum   = int(math.Pow(2, 14))
+	numSlots  = int(math.Pow(2, 14))
 	PN15QP880 = ckks.ParametersLiteral{
 		LogN:     15,
 		LogSlots: 14,
@@ -79,9 +81,8 @@ func main() {
 	featureData, labelData = readData(filename)
 
 	// Modify labelData correspoding to the target label
-	var classification_label float64 = 0 // 0, 1, 2, 3 in this case.
 	for i := 0; i < numData; i++ {
-		if real(labelData[i]) == classification_label {
+		if int(real(labelData[i])) == classification_label {
 			labelData[i] = complex(1, 0)
 		} else {
 			labelData[i] = complex(0, 0)
@@ -98,6 +99,9 @@ func main() {
 		panic(err)
 	}
 
+	// userList := make([]string, 1) // 1 is the number of max users (change later)
+	// idset := mkrlwe.NewIDSet()
+	// idset.Add("user0")
 	var companySet []string
 	for i := 0; i < numCompany; i++ {
 		companySet = append(companySet, "company"+strconv.Itoa(i))
@@ -117,8 +121,8 @@ func main() {
 
 	// Initialize beta_0, v_0
 	zero_msg := mkckks.NewMessage(testContext.params)
-	zero_vector := make([]complex128, slotNum)
-	for i := 0; i < int(slotNum); i++ {
+	zero_vector := make([]complex128, numSlots)
+	for i := 0; i < int(numSlots); i++ {
 		zero_vector[i] = complex(0, 0)
 	}
 	zero_msg.Value = zero_vector
@@ -131,15 +135,15 @@ func main() {
 	mean := make([]float64, numFeature)
 	std := make([]float64, numFeature)
 	for j := 0; j < numFeature; j++ {
-		for i := 0; i < batchSize; i++ {
+		for i := 0; i < numTrain; i++ {
 			mean[j] += real(featureData[i][j])
 		}
-		mean[j] /= float64(batchSize)
+		mean[j] /= float64(numTrain)
 
-		for i := 0; i < batchSize; i++ {
+		for i := 0; i < numTrain; i++ {
 			std[j] += math.Pow(real(featureData[i][j])-mean[j], 2)
 		}
-		std[j] = math.Sqrt(std[j] / float64(batchSize))
+		std[j] = math.Sqrt(std[j] / (float64(numTrain) - 1))
 	}
 
 	for i := 0; i < numData; i++ {
@@ -150,70 +154,61 @@ func main() {
 		}
 	}
 
-	// Each z has 512 data (feature num: 20(or 21) < 2^5, slot num: 2^14 --> include 2^9 data)
+	// Set batch parameters
 	logslotsPerData := int(math.Ceil(math.Log2(float64(numFeature))))
 	slotsPerData := int(math.Pow(2, float64(logslotsPerData)))
-	fmt.Print(slotsPerData)
-	var company_feature [4][5]int
-	for i := 0; i < numCompany; i++ {
-		for j := 0; j < 5; j++ {
-			company_feature[i][j] = i*5 + j
-		}
+	numDataPerCt := int(math.Pow(2, math.Log2(float64(numSlots))-float64(logslotsPerData)))
+	realnumDataPerCt := numDataPerCt
+	if batchSize < realnumDataPerCt {
+		realnumDataPerCt = batchSize
 	}
+	numCtPerBatch := int(math.Ceil(float64(batchSize) / float64(numDataPerCt)))
 
+	// Encrypt z
 	fmt.Println("Encrypting data...")
-	ztmp_msg := mkckks.NewMessage(testContext.params)
-	ztmp := make([]*mkckks.Ciphertext, numCompany)
-	for b := 0; b < numCompany; b++ {
-		ztmp_vector := make([]complex128, slotNum)
-		for i := 0; i < numTrain; i++ {
-			for j := 0; j < len(company_feature[b]); j++ {
-				ztmp_vector[i*slotsPerData+5*b+j] = featureData[i][company_feature[b][j]]
+	z_msg := mkckks.NewMessage(testContext.params)
+	z := make([][]*mkckks.Ciphertext, numBatch)
+	for b := 0; b < numBatch; b++ {
+		z[b] = make([]*mkckks.Ciphertext, numCtPerBatch)
+		for i := 0; i < numCtPerBatch; i++ {
+			z_vector := make([]complex128, numSlots)
+			for j := 0; j < realnumDataPerCt; j++ {
+				dataId := b*numCtPerBatch*realnumDataPerCt + i*realnumDataPerCt + j
+				if dataId >= numTrain {
+					break
+				}
+				for k := 0; k < numFeature; k++ {
+					z_vector[j*slotsPerData+k] = featureData[dataId][k]
+				}
 			}
+			z_msg.Value = z_vector
+			z[b][i] = testContext.encryptor.EncryptMsgNewExpand(z_msg, testContext.pkSet.GetPublicKey(id), idset)
 		}
-		ztmp_msg.Value = ztmp_vector
-		ztmp[b] = testContext.encryptor.EncryptMsgNewExpand(ztmp_msg, testContext.pkSet.GetPublicKey(id), idset)
 	}
-
-	z := ztmp[0]
-	fmt.Printf("z0: ")
-	z0_decrypt := testContext.decryptor.Decrypt(z, testContext.skSet)
-	fmt.Println(z0_decrypt.Value[0:6])
-	fmt.Println()
-	fmt.Printf("z1: ")
-	z1_decrypt := testContext.decryptor.Decrypt(ztmp[1], testContext.skSet)
-	fmt.Println(z1_decrypt.Value[0:6])
-	fmt.Println()
-	fmt.Printf("z2: ")
-	z2_decrypt := testContext.decryptor.Decrypt(ztmp[2], testContext.skSet)
-	fmt.Println(z2_decrypt.Value[0:6])
-	fmt.Println()
-	fmt.Printf("z3: ")
-	z3_decrypt := testContext.decryptor.Decrypt(ztmp[3], testContext.skSet)
-	fmt.Println(z3_decrypt.Value[0:6])
-	fmt.Println()
-
-	for i := 1; i < numCompany; i++ {
-		fmt.Print(i)
-		z = testContext.evaluator.AddNew(z, ztmp[i])
-	}
-	fmt.Printf("z: ")
-	z_decrypt := testContext.decryptor.Decrypt(z, testContext.skSet)
-	fmt.Println(z_decrypt.Value[0:10])
-	fmt.Println(z_decrypt.Value[200:210])
 
 	// Generate a label vector
-	label_vector := make([]complex128, slotNum)
-	for i := 0; i < batchSize; i++ {
-		for j := 0; j < int(math.Pow(2, float64(5))); j++ {
-			label_vector[int(math.Pow(2, float64(5)))*i+j] = labelData[i]
+	label_vector := make([][][]complex128, numBatch)
+	for b := 0; b < numBatch; b++ {
+		label_vector[b] = make([][]complex128, numCtPerBatch)
+		for i := 0; i < numCtPerBatch; i++ {
+			label_vector[b][i] = make([]complex128, numSlots)
+			for j := 0; j < realnumDataPerCt; j++ {
+				dataId := b*numCtPerBatch*realnumDataPerCt + i*realnumDataPerCt + j
+				//dataId := b*numCtPerBatch + i*realnumDataPerCt + j
+				if dataId >= numTrain {
+					break
+				}
+				for k := 0; k < numFeature; k++ {
+					label_vector[b][i][j*slotsPerData+k] = labelData[dataId]
+				}
+			}
 		}
 	}
 
 	// Generate a mask ciphertext
 	mask_msg := mkckks.NewMessage(testContext.params)
-	mask_vector := make([]complex128, slotNum)
-	for i := 0; i < int(slotNum); i++ {
+	mask_vector := make([]complex128, numSlots)
+	for i := 0; i < int(numSlots); i++ {
 		if i%int(math.Pow(2, float64(5))) == 0 {
 			mask_vector[i] = complex(1, 0)
 		} else {
@@ -225,27 +220,39 @@ func main() {
 
 	// Generate constant ct & pt
 	const_msg := mkckks.NewMessage(testContext.params)
-	const_vector := make([]complex128, slotNum)
+	const_vector := make([]complex128, numSlots)
 
 	// const1_pt = -(gamma / data_num * (c0-y))
-	for i := 0; i < int(slotNum); i++ {
-		const_vector[i] = complex(-float64(gamma)/float64(batchSize)*(c0-real(label_vector[i])), 0)
+	const1_pt := make([][]*ckks.Plaintext, numBatch)
+	for b := 0; b < numBatch; b++ {
+		const1_pt[b] = make([]*ckks.Plaintext, numCtPerBatch)
+		for i := 0; i < numCtPerBatch; i++ {
+			for j := 0; j < numSlots; j++ {
+				const_vector[j] = complex(-float64(gamma)/float64(batchSize)*(c0-real(label_vector[b][i][j])), 0)
+			}
+			const_msg.Value = const_vector
+			const1_pt[b][i] = testContext.encryptor.EncodeMsgNew(const_msg)
+		}
 	}
-	const_msg.Value = const_vector
-	const1_pt := testContext.encryptor.EncodeMsgNew(const_msg)
 
 	// const2_pt = -(1 - eta) * gamma / data_num * (c0-y)
-	const2_pt := make([]*ckks.Plaintext, numIter)
-	for iter := 0; iter < numIter; iter++ {
-		for i := 0; i < int(slotNum); i++ {
-			const_vector[i] = complex(-(1-eta[iter])*float64(gamma)/float64(batchSize)*(c0-real(label_vector[i])), 0)
+	const2_pt := make([][][]*ckks.Plaintext, numBatch)
+	for b := 0; b < numBatch; b++ {
+		const2_pt[b] = make([][]*ckks.Plaintext, numCtPerBatch)
+		for i := 0; i < numCtPerBatch; i++ {
+			const2_pt[b][i] = make([]*ckks.Plaintext, numIter)
+			for iter := 0; iter < numIter; iter++ {
+				for j := 0; j < numSlots; j++ {
+					const_vector[j] = complex(-(1-eta[iter])*float64(gamma)/float64(batchSize)*(c0-real(label_vector[b][i][j])), 0)
+				}
+				const_msg.Value = const_vector
+				const2_pt[b][i][iter] = testContext.encryptor.EncodeMsgNew(const_msg)
+			}
 		}
-		const_msg.Value = const_vector
-		const2_pt[iter] = testContext.encryptor.EncodeMsgNew(const_msg)
 	}
 
 	// const3_pt = -(gamma / data_num * c3)
-	for i := 0; i < int(slotNum); i++ {
+	for i := 0; i < int(numSlots); i++ {
 		const_vector[i] = complex(-float64(gamma)/float64(batchSize)*c3, 0)
 	}
 	const_msg.Value = const_vector
@@ -254,7 +261,7 @@ func main() {
 	// const4_pt = -(1 - eta) * gamma / data_num * c3
 	const4_pt := make([]*ckks.Plaintext, numIter)
 	for iter := 0; iter < numIter; iter++ {
-		for i := 0; i < int(slotNum); i++ {
+		for i := 0; i < int(numSlots); i++ {
 			const_vector[i] = complex(-(1-eta[iter])*float64(gamma)/float64(batchSize)*c3, 0)
 		}
 		const_msg.Value = const_vector
@@ -262,7 +269,7 @@ func main() {
 	}
 
 	// const5_ct = c1/c3
-	for i := 0; i < int(slotNum); i++ {
+	for i := 0; i < int(numSlots); i++ {
 		const_vector[i] = complex(c1/c3, 0)
 	}
 	const_msg.Value = const_vector
@@ -271,7 +278,7 @@ func main() {
 	// const6_pt = (1 - eta)
 	const6_pt := make([]*ckks.Plaintext, numIter)
 	for iter := 0; iter < numIter; iter++ {
-		for i := 0; i < int(slotNum); i++ {
+		for i := 0; i < int(numSlots); i++ {
 			const_vector[i] = complex(1-eta[iter], 0)
 		}
 		const6_pt[iter] = testContext.encryptor.EncodeMsgNew(const_msg)
@@ -279,21 +286,21 @@ func main() {
 	// const7_pt = eta
 	const7_pt := make([]*ckks.Plaintext, numIter)
 	for iter := 0; iter < numIter; iter++ {
-		for i := 0; i < int(slotNum); i++ {
+		for i := 0; i < int(numSlots); i++ {
 			const_vector[i] = complex(eta[iter], 0)
 		}
 		const7_pt[iter] = testContext.encryptor.EncodeMsgNew(const_msg)
 	}
 
 	// const8_pt = c3
-	for i := 0; i < int(slotNum); i++ {
+	for i := 0; i < int(numSlots); i++ {
 		const_vector[i] = complex(c3, 0)
 	}
 	const_msg.Value = const_vector
 	const8_pt := testContext.encryptor.EncodeMsgNew(const_msg)
 
 	// const9_ct = c0
-	for i := 0; i < int(slotNum); i++ {
+	for i := 0; i < int(numSlots); i++ {
 		const_vector[i] = complex(c0, 0)
 	}
 	const_msg.Value = const_vector
@@ -302,67 +309,81 @@ func main() {
 	fmt.Println()
 	fmt.Println("Training...")
 	start := time.Now()
-	for a := 0; a < numIter; a++ {
+	//for a := 0; a < numIter; a++ {
+	for a := 0; a < 3; a++ {
+		fmt.Println()
 		fmt.Println(a, "-th Iteration")
-		//////////////////////////// depth 1 //////////////////////////////////
-		// M_j = Z_j * V_j
-		m := testContext.evaluator.MulRelinNew(z, v, testContext.rlkSet)
+		batchId := a % numBatch
 
-		// z1 = -(gamma / data_num * (c0-y)) * Z_j
-		z1 := testContext.evaluator.MulPtxtNew(z, const1_pt)
+		g_acc := testContext.encryptor.EncryptMsgNew(zero_msg, testContext.pkSet.GetPublicKey(id))
+		u_acc := testContext.encryptor.EncryptMsgNew(zero_msg, testContext.pkSet.GetPublicKey(id))
 
-		// z2 = -(1 - eta) * gamma / data_num * (c0-y) * Z_j
-		z2 := testContext.evaluator.MulPtxtNew(z, const2_pt[a])
+		for ctId := 0; ctId < numCtPerBatch; ctId++ {
+			//////////////////////////// depth 1 //////////////////////////////////
+			// M_j = Z_j * V_j
+			m := testContext.evaluator.MulRelinNew(z[batchId][ctId], v, testContext.rlkSet)
 
-		// z3 = -(gamma / data_num * c3) * Z_j
-		z3 := testContext.evaluator.MulPtxtNew(z, const3_pt)
+			// z1 = -(gamma / data_num * (c0-y)) * Z_j
+			z1 := testContext.evaluator.MulPtxtNew(z[batchId][ctId], const1_pt[batchId][ctId])
 
-		// z4 = -(1 - eta) * gamma / data_num * c3 * Z_j
-		z4 := testContext.evaluator.MulPtxtNew(z, const4_pt[a])
+			// z2 = -(1 - eta) * gamma / data_num * (c0-y) * Z_j
+			z2 := testContext.evaluator.MulPtxtNew(z[batchId][ctId], const2_pt[batchId][ctId][a])
 
-		///////////////////////////// depth 2 //////////////////////////////////
-		// M = \sum_j SumColVec(M_j)
-		m = SumColVec(testContext.evaluator, testContext.rlkSet, testContext.rtkSet, m, mask, int(math.Pow(2, 9.0)), int(math.Pow(2, 5.0)))
+			// z3 = -(gamma / data_num * c3) * Z_j
+			z3 := testContext.evaluator.MulPtxtNew(z[batchId][ctId], const3_pt)
 
-		///////////////////////////// depth 3 //////////////////////////////////
-		// M'' = M * M + c1/c3
-		m2 := testContext.evaluator.MulRelinNew(m, m, testContext.rlkSet)
-		m2 = testContext.evaluator.AddNew(m2, const5_ct)
+			// z4 = -(1 - eta) * gamma / data_num * c3 * Z_j
+			z4 := testContext.evaluator.MulPtxtNew(z[batchId][ctId], const4_pt[a])
 
-		// M' = M * Z3_j
-		m1 := testContext.evaluator.MulRelinNew(m, z3, testContext.rlkSet)
+			///////////////////////////// depth 2 //////////////////////////////////
+			// M = \sum_j SumColVec(M_j)
+			m = SumColVec(testContext.evaluator, testContext.rlkSet, testContext.rtkSet, m, mask, numDataPerCt, slotsPerData)
 
-		// S_j = Z4_j * M
-		s := testContext.evaluator.MulRelinNew(z4, m, testContext.rlkSet)
+			///////////////////////////// depth 3 //////////////////////////////////
+			// M'' = M * M + c1/c3
+			m2 := testContext.evaluator.MulRelinNew(m, m, testContext.rlkSet)
+			m2 = testContext.evaluator.AddNew(m2, const5_ct)
 
-		///////////////////////////// depth 4 //////////////////////////////////
-		// G_j = M' * M'' + Z1_j
-		g := testContext.evaluator.MulRelinNew(m1, m2, testContext.rlkSet)
-		g = testContext.evaluator.AddNew(g, z1)
+			// M' = M * Z3_j
+			m1 := testContext.evaluator.MulRelinNew(m, z3, testContext.rlkSet)
 
-		// W+_j = V_j + SumRowVec(G_j)
+			// S_j = Z4_j * M
+			s := testContext.evaluator.MulRelinNew(z4, m, testContext.rlkSet)
 
-		for i := 1; i < 512; i *= 2 {
-			g_rot := testContext.evaluator.RotateNew(g, 32*i, testContext.rtkSet)
-			g = testContext.evaluator.AddNew(g, g_rot)
+			///////////////////////////// depth 4 //////////////////////////////////
+			// G_j = M' * M'' + Z1_j
+			g := testContext.evaluator.MulRelinNew(m1, m2, testContext.rlkSet)
+			g = testContext.evaluator.AddNew(g, z1)
+
+			// U_j = S_j * M'' + Z2_j
+			u := testContext.evaluator.MulRelinNew(s, m2, testContext.rlkSet)
+			u = testContext.evaluator.AddNew(u, z2)
+			g_acc = testContext.evaluator.AddNew(g_acc, g)
+			u_acc = testContext.evaluator.AddNew(u_acc, u)
 		}
 
-		beta_update := testContext.evaluator.AddNew(v, g)
-		// U_j = S_j * M'' + Z2_j
-		u := testContext.evaluator.MulRelinNew(s, m2, testContext.rlkSet)
-		u = testContext.evaluator.AddNew(u, z2)
+		g_acc = SumRowVec(testContext.evaluator, testContext.rtkSet, g_acc, numDataPerCt, slotsPerData)
+
+		beta_update := testContext.evaluator.AddNew(v, g_acc)
 
 		// V+_j = eta * W_j + (1 - eta) * V_j + SumRowVec(U_j)
 		v_update := testContext.evaluator.MulPtxtNew(v, const6_pt[a])
-		beta = testContext.evaluator.MulPtxtNew(beta, const7_pt[a])
-		v_update = testContext.evaluator.AddNew(v_update, beta)
+		beta1 := testContext.evaluator.MulPtxtNew(beta, const7_pt[a])
+		v_update = testContext.evaluator.AddNew(v_update, beta1)
 
-		u = SumRowVec(testContext.evaluator, testContext.rtkSet, u, int(math.Pow(2, 9.0)), int(math.Pow(2, 5.0)))
-
-		v_update = testContext.evaluator.AddNew(v_update, u)
+		u_acc = SumRowVec(testContext.evaluator, testContext.rtkSet, u_acc, numDataPerCt, slotsPerData)
+		v_update = testContext.evaluator.AddNew(v_update, u_acc)
 
 		v = v_update
 		beta = beta_update
+
+		fmt.Printf("beta: ")
+		beta_decrypt := testContext.decryptor.Decrypt(beta, testContext.skSet)
+		fmt.Println(beta_decrypt.Value[0:2])
+
+		fmt.Printf("v: ")
+		v_decrypt := testContext.decryptor.Decrypt(v, testContext.skSet)
+		fmt.Println(v_decrypt.Value[0:2])
 	}
 	end := time.Now()
 	elapsed := end.Sub(start)
@@ -372,14 +393,13 @@ func main() {
 	fmt.Println()
 	fmt.Println("Inference...")
 	correct := 0
-	//for i := 0; i < numData; i++ {
-	for i := 0; i < 3; i++ {
+	for i := 0; i < numData; i++ {
 		if i%100 == 0 {
 			fmt.Println(i, "-th Data Inferenced")
 		}
 		// Encrypt test data
 		test_msg := mkckks.NewMessage(testContext.params)
-		test_vector := make([]complex128, slotNum)
+		test_vector := make([]complex128, numSlots)
 		for j := 0; j < numFeature; j++ {
 			test_vector[j] = featureData[i][j]
 		}
@@ -419,13 +439,13 @@ func main() {
 	/*
 		// Check by Index
 		correct := 0
-		i := 1935
+		i := 1950
 		// Encrypt test data
 		fmt.Println()
 		fmt.Println("Test Data ID:", i)
 		fmt.Println("Encrypting Test Data...")
 		test_msg := mkckks.NewMessage(testContext.params)
-		test_vector := make([]complex128, slotNum)
+		test_vector := make([]complex128, numSlots)
 		for j := 0; j < numFeature; j++ {
 			test_vector[j] = featureData[i][j]
 		}
@@ -471,10 +491,6 @@ func main() {
 	*/
 	return
 }
-
-//////////////////////////////////////////////////////
-///////  Functions for logistic regression  /////////
-/////////////////////////////////////////////////////
 
 func SumRowVec(eval *mkckks.Evaluator, rtkSet *mkrlwe.RotationKeySet, ctIn *mkckks.Ciphertext, numRow, numCol int) (ctOut *mkckks.Ciphertext) {
 	ctOut = ctIn
