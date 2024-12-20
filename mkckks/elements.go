@@ -47,3 +47,7 @@ func NewMessage(params Parameters) *Message {
 func (msg *Message) Slots() int {
 	return len(msg.Value)
 }
+
+func (el *Ciphertext) Degree() int {
+	return len(el.Value) - 1
+}

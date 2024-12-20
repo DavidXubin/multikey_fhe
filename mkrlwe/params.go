@@ -1,9 +1,14 @@
 package mkrlwe
 
-import "github.com/ldsec/lattigo/v2/rlwe"
-import "github.com/ldsec/lattigo/v2/ring"
-import "github.com/ldsec/lattigo/v2/utils"
-import "math"
+import (
+	"encoding/binary"
+	"fmt"
+	"math"
+
+	"github.com/ldsec/lattigo/v2/ring"
+	"github.com/ldsec/lattigo/v2/rlwe"
+	"github.com/ldsec/lattigo/v2/utils"
+)
 
 type Parameters struct {
 	rlwe.Parameters
@@ -96,4 +101,102 @@ func (params *Parameters) AddCRS(idx int) {
 		uniformSamplerP.Read(params.CRS[idx].Value[i].P)
 		params.RingQP().MFormLvl(levelQ, levelP, params.CRS[idx].Value[i], params.CRS[idx].Value[i])
 	}
+}
+
+func (params Parameters) GetDataLen(WithMetaData bool) (dataLen int) {
+
+	if WithMetaData {
+		dataLen = 4
+	}
+
+	dataLen += params.Parameters.MarshalBinarySize()
+
+	for _, k := range params.CRS {
+		if WithMetaData {
+			dataLen += 4
+		}
+		dataLen += k.GetDataLen(WithMetaData)
+	}
+
+	dataLen += 4
+	return
+}
+
+func (params Parameters) MarshalBinary() ([]byte, error) {
+
+	var pointer = 0
+	var rlweParamsBuf []byte
+	var err error
+
+	data := make([]byte, params.GetDataLen(true))
+
+	if rlweParamsBuf, err = params.Parameters.MarshalBinary(); err != nil {
+		return []byte{}, err
+	}
+
+	binary.BigEndian.PutUint32(data[pointer:pointer+4], uint32(len(rlweParamsBuf)))
+
+	pointer += 4
+
+	copy(data[pointer:], rlweParamsBuf)
+
+	pointer += len(rlweParamsBuf)
+
+	for idx, key := range params.CRS {
+
+		binary.BigEndian.PutUint32(data[pointer:pointer+4], uint32(idx))
+
+		pointer += 4
+
+		if pointer, err = key.encode(pointer, data); err != nil {
+			return nil, err
+		}
+
+	}
+
+	binary.BigEndian.PutUint32(data[pointer:pointer+4], uint32(params.gamma))
+
+	return data, nil
+}
+
+func (p *Parameters) UnmarshalBinary(data []byte) error {
+	if len(data) < 11 {
+		return fmt.Errorf("invalid rlwe.Parameter serialization")
+	}
+
+	var pointer = 4
+	var err error
+	var inc = 0
+
+	rlweParamsLen := int(binary.BigEndian.Uint32(data))
+
+	var ckksParams rlwe.Parameters
+
+	ckksParams.UnmarshalBinary(data[pointer : pointer+rlweParamsLen])
+
+	p.Parameters = ckksParams
+
+	pointer += rlweParamsLen
+
+	p.CRS = make(map[int]*SwitchingKey)
+
+	for pointer < len(data)-4 {
+
+		idx := int32(binary.BigEndian.Uint32(data[pointer:]))
+		pointer += 4
+
+		swk := new(SwitchingKey)
+
+		if inc, err = swk.decode(data[pointer:]); err != nil {
+			return err
+		}
+
+		pointer += inc
+
+		p.CRS[int(idx)] = swk
+	}
+
+	p.gamma = int(int32(binary.BigEndian.Uint32(data[pointer:])))
+
+	return err
 }
