@@ -26,10 +26,12 @@ func calulation(client_1 string, client_2 string) {
 
 	pubFile_1 := path.Join(dataPath, client_1+"_ckks_pubkey.dat")
 	rlkFile_1 := path.Join(dataPath, client_1+"_ckks_rlkey.dat")
+	rtkFile_1 := path.Join(dataPath, client_1+"_ckks_rtkey.dat")
 	cryptDataFile_1 := path.Join(dataPath, client_1+"_ckks_cipher_data.dat")
 
 	pubFile_2 := path.Join(dataPath, client_2+"_ckks_pubkey.dat")
 	rlkFile_2 := path.Join(dataPath, client_2+"_ckks_rlkey.dat")
+	rtkFile_2 := path.Join(dataPath, client_2+"_ckks_rtkey.dat")
 	cryptDataFile_2 := path.Join(dataPath, client_2+"_ckks_cipher_data.dat")
 
 	if !fileExists(paramsFile) {
@@ -47,6 +49,11 @@ func calulation(client_1 string, client_2 string) {
 		return
 	}
 
+	if !fileExists(rtkFile_1) {
+		fmt.Printf("%s does not exist", rtkFile_1)
+		return
+	}
+
 	if !fileExists(cryptDataFile_1) {
 		fmt.Printf("%s does not exist", cryptDataFile_1)
 		return
@@ -59,6 +66,11 @@ func calulation(client_1 string, client_2 string) {
 
 	if !fileExists(rlkFile_2) {
 		fmt.Printf("%s does not exist", rlkFile_1)
+		return
+	}
+
+	if !fileExists(rtkFile_2) {
+		fmt.Printf("%s does not exist", rtkFile_2)
 		return
 	}
 
@@ -97,6 +109,27 @@ func calulation(client_1 string, client_2 string) {
 	rlkSet.AddRelinearizationKey(&rlk_1)
 	rlkSet.AddRelinearizationKey(&rlk_2)
 
+	//读取并反序列化双方的旋转密钥
+	var rtkBytes []byte
+	var rtkset_1 mkrlwe.RotationKeySet
+	var rtkset_2 mkrlwe.RotationKeySet
+
+	rtkBytes, err = os.ReadFile(rtkFile_1)
+	if err != nil {
+		panic(err)
+	}
+	rtkset_1.UnmarshalBinary(rtkBytes)
+
+	rtkBytes, err = os.ReadFile(rtkFile_2)
+	if err != nil {
+		panic(err)
+	}
+	rtkset_2.UnmarshalBinary(rtkBytes)
+
+	rtkSet := mkrlwe.NewRotationKeySet()
+	rtkSet.Value[client_1] = rtkset_1.Value[client_1]
+	rtkSet.Value[client_2] = rtkset_2.Value[client_2]
+
 	//使用公共参数构建评估器
 	evaluator := mkckks.NewEvaluator(params)
 
@@ -127,10 +160,28 @@ func calulation(client_1 string, client_2 string) {
 	//对双方密文数组求积，对应位置相加密文相乘
 	ctMul := evaluator.MulRelinNew(&ct1, &ct2, rlkSet)
 
+	fmt.Print("Start to add and multiply all data")
+
+	//求密文的累加t
+	ctSum := ctAdd.CopyNew()
+	for i := 1; i <= 32; i *= 2 {
+		ctrot := evaluator.RotateNew(ctSum, i, rtkSet)
+		ctSum = evaluator.AddNew(ctSum, ctrot)
+	}
+
+	//求密文的累乘
+	ctAllMult := ctMul.CopyNew()
+	for i := 1; i <= 32; i *= 2 {
+		ctrot := evaluator.RotateNew(ctAllMult, i, rtkSet)
+		ctAllMult = evaluator.MulRelinNew(ctAllMult, ctrot, rlkSet)
+	}
+
 	//将双方密文加减乘的3个运算结果分别保存进文件
 	sumFile := "sum_ckks_data.dat"
 	subFile := "sub_ckks_data.dat"
 	mulFile := "mul_ckks_data.dat"
+	allSumFile := "all_sum_ckks_data.dat"
+	allMulFule := "all_mul_ckks_data.dat"
 
 	cipherBytes, err = ctAdd.MarshalBinary()
 	if err != nil {
@@ -161,11 +212,31 @@ func calulation(client_1 string, client_2 string) {
 		panic(err)
 	}
 
+	cipherBytes, err = ctSum.MarshalBinary()
+	if err != nil {
+		panic(err)
+	}
+
+	err = os.WriteFile(allSumFile, cipherBytes, 0640)
+	if err != nil {
+		panic(err)
+	}
+
+	cipherBytes, err = ctAllMult.MarshalBinary()
+	if err != nil {
+		panic(err)
+	}
+
+	err = os.WriteFile(allMulFule, cipherBytes, 0640)
+	if err != nil {
+		panic(err)
+	}
+
 }
 
 func main() {
-	client_1 := flag.String("client_1", "default_company", "company name to do ckks encrytion")
-	client_2 := flag.String("client_2", "default_company", "company name to do ckks encrytion")
+	client_1 := flag.String("client_1", "company_a", "company name to do ckks encrytion")
+	client_2 := flag.String("client_2", "company_b", "company name to do ckks encrytion")
 
 	flag.Parse()
 

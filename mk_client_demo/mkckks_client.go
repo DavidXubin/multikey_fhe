@@ -124,6 +124,7 @@ func mkgenerate(clientName string) {
 	pubFile := clientName + "_ckks_pubkey.dat"
 	secFile := clientName + "_ckks_seckey.dat"
 	rlkFile := clientName + "_ckks_rlkey.dat"
+	rtkFile := clientName + "_ckks_rtkey.dat"
 
 	// This example packs random 8192 float64 values in the range [-8, 8]
 	// and approximates the function 1/(exp(-x) + 1) over the range [-8, 8].
@@ -169,6 +170,11 @@ func mkgenerate(clientName string) {
 	// Relinearization key
 	rlk := kgen.GenRelinearizationKey(sk, r)
 
+	//生成旋转密钥
+	rtkSet := mkrlwe.NewRotationKeySet()
+
+	kgen.GenDefaultRotationKeys(sk, rtkSet)
+
 	//serialize pub key
 	pubBytes, err := pk.MarshalBinary()
 	if err != nil {
@@ -198,6 +204,17 @@ func mkgenerate(clientName string) {
 	}
 
 	err = os.WriteFile(rlkFile, rlkBytes, 0640)
+	if err != nil {
+		panic(err)
+	}
+
+	//serialize rotation keyset
+	rtkBytes, err := rtkSet.MarshalBinary()
+	if err != nil {
+		panic(err)
+	}
+
+	err = os.WriteFile(rtkFile, rtkBytes, 0640)
 	if err != nil {
 		panic(err)
 	}

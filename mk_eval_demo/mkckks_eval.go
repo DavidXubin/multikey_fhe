@@ -97,6 +97,13 @@ func showClientData(client string) {
 }
 
 func eval(client_1 string, client_2 string) {
+
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Println("Recovered from", r)
+		}
+	}()
+
 	paramsFile := path.Join(keyPath, "ckks_params.dat")
 
 	skFile_1 := path.Join(keyPath, client_1+"_ckks_seckey.dat")
@@ -105,6 +112,8 @@ func eval(client_1 string, client_2 string) {
 	cryptSumFile := path.Join(resultPath, "sum_ckks_data.dat")
 	cryptSubFile := path.Join(resultPath, "sub_ckks_data.dat")
 	cryptMulFile := path.Join(resultPath, "mul_ckks_data.dat")
+	cryptAllSumFile := path.Join(resultPath, "all_sum_ckks_data.dat")
+	cryptAllMulFile := path.Join(resultPath, "all_mul_ckks_data.dat")
 
 	if !fileExists(paramsFile) {
 		fmt.Printf("%s does not exist", paramsFile)
@@ -132,6 +141,16 @@ func eval(client_1 string, client_2 string) {
 	}
 
 	if !fileExists(cryptMulFile) {
+		fmt.Printf("%s does not exist", cryptMulFile)
+		return
+	}
+
+	if !fileExists(cryptAllSumFile) {
+		fmt.Printf("%s does not exist", cryptSubFile)
+		return
+	}
+
+	if !fileExists(cryptAllMulFile) {
 		fmt.Printf("%s does not exist", cryptMulFile)
 		return
 	}
@@ -168,10 +187,12 @@ func eval(client_1 string, client_2 string) {
 	skSet.Value[client_1] = &sk1
 	skSet.Value[client_2] = &sk2
 
-	//从文件读取3个密文
+	//从文件读取5个密文
 	var ctSum mkckks.Ciphertext
 	var ctSub mkckks.Ciphertext
 	var ctMul mkckks.Ciphertext
+	var ctAllSum mkckks.Ciphertext
+	var ctAllMul mkckks.Ciphertext
 
 	cipherBytes, err := os.ReadFile(cryptSumFile)
 	if err != nil {
@@ -194,6 +215,20 @@ func eval(client_1 string, client_2 string) {
 
 	ctMul.UnmarshalBinary(cipherBytes)
 
+	cipherBytes, err = os.ReadFile(cryptAllSumFile)
+	if err != nil {
+		panic(err)
+	}
+
+	ctAllSum.UnmarshalBinary(cipherBytes)
+
+	cipherBytes, err = os.ReadFile(cryptAllMulFile)
+	if err != nil {
+		panic(err)
+	}
+
+	ctAllMul.UnmarshalBinary(cipherBytes)
+
 	decryptor := mkckks.NewDecryptor(params)
 
 	msgSum := decryptor.Decrypt(&ctSum, &skSet)
@@ -211,11 +246,33 @@ func eval(client_1 string, client_2 string) {
 	fmt.Println()
 	printDebug(&ctMul, msgMul.Value)
 
+	msgAllSum := decryptor.Decrypt(&ctAllSum, &skSet)
+	fmt.Printf("%s and %s decrypted all sum:", client_1, client_2)
+	fmt.Println()
+	printDebug(&ctMul, msgAllSum.Value)
+
+	msgAllMul := decryptor.Decrypt(&ctAllMul, &skSet)
+	fmt.Printf("%s and %s decrypted all multiply:", client_1, client_2)
+	fmt.Println()
+	printDebug(&ctMul, msgAllMul.Value)
+
+	//演示只有双方任意一个私钥无法解密它们的运算结果, 会抛出异常
+	var skSetSingle mkrlwe.SecretKeySet
+	skSetSingle.Value = make(map[string]*mkrlwe.SecretKey)
+
+	skSetSingle.Value[client_1] = &sk1
+
+	fmt.Println("try to decrypt sum with one party sk")
+	msgSum = decryptor.Decrypt(&ctSum, &skSetSingle)
+	fmt.Printf("%s and %s decrypted sum:", client_1, client_2)
+	fmt.Println()
+	printDebug(&ctSum, msgSum.Value)
+
 }
 
 func main() {
-	client_1 := flag.String("client_1", "default_company", "company name to do ckks encrytion")
-	client_2 := flag.String("client_2", "default_company", "company name to do ckks encrytion")
+	client_1 := flag.String("client_1", "company_a", "company name to do ckks encrytion")
+	client_2 := flag.String("client_2", "company_b", "company name to do ckks encrytion")
 
 	flag.Parse()
 
