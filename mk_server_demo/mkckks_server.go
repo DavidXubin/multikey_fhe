@@ -162,17 +162,21 @@ func calulation(client_1 string, client_2 string) {
 
 	fmt.Print("Start to add and multiply all data")
 
-	//求密文的累加t
+	//求密文的累加
 	ctSum := ctAdd.CopyNew()
-	for i := 1; i <= 32; i *= 2 {
-		ctrot := evaluator.RotateNew(ctSum, i, rtkSet)
+	for i := 1; i < 5; i++ {
+		ctrot := evaluator.RotateNew(ctAdd, i, rtkSet)
 		ctSum = evaluator.AddNew(ctSum, ctrot)
 	}
 
 	//求密文的累乘
 	ctAllMult := ctMul.CopyNew()
-	for i := 1; i <= 32; i *= 2 {
-		ctrot := evaluator.RotateNew(ctAllMult, i, rtkSet)
+
+	ctrot := evaluator.RotateNew(ctAllMult, 3, rtkSet)
+	// ctAllMult = evaluator.MulRelinNew(ctAllMult, ctrot, rlkSet)
+
+	for i := 1; i < 5; i++ {
+		ctrot := evaluator.RotateNew(ctMul, i, rtkSet)
 		ctAllMult = evaluator.MulRelinNew(ctAllMult, ctrot, rlkSet)
 	}
 
@@ -181,7 +185,8 @@ func calulation(client_1 string, client_2 string) {
 	subFile := "sub_ckks_data.dat"
 	mulFile := "mul_ckks_data.dat"
 	allSumFile := "all_sum_ckks_data.dat"
-	allMulFule := "all_mul_ckks_data.dat"
+	allMulFile := "all_mul_ckks_data.dat"
+	rotateFile := "rotate_ckks_data.dat"
 
 	cipherBytes, err = ctAdd.MarshalBinary()
 	if err != nil {
@@ -227,7 +232,17 @@ func calulation(client_1 string, client_2 string) {
 		panic(err)
 	}
 
-	err = os.WriteFile(allMulFule, cipherBytes, 0640)
+	err = os.WriteFile(allMulFile, cipherBytes, 0640)
+	if err != nil {
+		panic(err)
+	}
+
+	cipherBytes, err = ctrot.MarshalBinary()
+	if err != nil {
+		panic(err)
+	}
+
+	err = os.WriteFile(rotateFile, cipherBytes, 0640)
 	if err != nil {
 		panic(err)
 	}

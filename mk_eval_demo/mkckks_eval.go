@@ -115,6 +115,8 @@ func eval(client_1 string, client_2 string) {
 	cryptAllSumFile := path.Join(resultPath, "all_sum_ckks_data.dat")
 	cryptAllMulFile := path.Join(resultPath, "all_mul_ckks_data.dat")
 
+	cryptRotateFile := path.Join(resultPath, "rotate_ckks_data.dat")
+
 	if !fileExists(paramsFile) {
 		fmt.Printf("%s does not exist", paramsFile)
 		return
@@ -151,6 +153,11 @@ func eval(client_1 string, client_2 string) {
 	}
 
 	if !fileExists(cryptAllMulFile) {
+		fmt.Printf("%s does not exist", cryptMulFile)
+		return
+	}
+
+	if !fileExists(cryptRotateFile) {
 		fmt.Printf("%s does not exist", cryptMulFile)
 		return
 	}
@@ -193,6 +200,7 @@ func eval(client_1 string, client_2 string) {
 	var ctMul mkckks.Ciphertext
 	var ctAllSum mkckks.Ciphertext
 	var ctAllMul mkckks.Ciphertext
+	var ctRot mkckks.Ciphertext
 
 	cipherBytes, err := os.ReadFile(cryptSumFile)
 	if err != nil {
@@ -229,6 +237,13 @@ func eval(client_1 string, client_2 string) {
 
 	ctAllMul.UnmarshalBinary(cipherBytes)
 
+	cipherBytes, err = os.ReadFile(cryptRotateFile)
+	if err != nil {
+		panic(err)
+	}
+
+	ctRot.UnmarshalBinary(cipherBytes)
+
 	decryptor := mkckks.NewDecryptor(params)
 
 	msgSum := decryptor.Decrypt(&ctSum, &skSet)
@@ -255,6 +270,11 @@ func eval(client_1 string, client_2 string) {
 	fmt.Printf("%s and %s decrypted all multiply:", client_1, client_2)
 	fmt.Println()
 	printDebug(&ctMul, msgAllMul.Value)
+
+	msgRotate := decryptor.Decrypt(&ctRot, &skSet)
+	fmt.Printf("%s and %s decrypted rotate:", client_1, client_2)
+	fmt.Println()
+	printDebug(&ctRot, msgRotate.Value)
 
 	//演示只有双方任意一个私钥无法解密它们的运算结果, 会抛出异常
 	var skSetSingle mkrlwe.SecretKeySet
